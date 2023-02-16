@@ -192,6 +192,7 @@ set(ARROW_SRCS
     io/stdio.cc
     io/transform.cc
     util/async_util.cc
+    util/atfork_internal.cc
     util/basic_decimal.cc
     util/bit_block_counter.cc
     util/bit_run_reader.cc
@@ -205,6 +206,7 @@ set(ARROW_SRCS
     util/compression.cc
     util/counting_semaphore.cc
     util/cpu_info.cc
+    util/crc32.cc
     util/debug.cc
     util/decimal.cc
     util/delimiting.cc
@@ -241,6 +243,8 @@ set(ARROW_SRCS
 
 if(ARROW_JEMALLOC)
   list(APPEND ARROW_SRCS memory_pool_jemalloc.cc)
+  set_source_files_properties(memory_pool_jemalloc.cc
+                              PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 endif()
 
 append_avx2_src(util/bpacking_avx2.cc)
@@ -391,16 +395,19 @@ if(ARROW_COMPUTE)
        compute/exec/bloom_filter.cc
        compute/exec/exec_plan.cc
        compute/exec/expression.cc
+       compute/exec/fetch_node.cc
        compute/exec/filter_node.cc
        compute/exec/hash_join.cc
        compute/exec/hash_join_dict.cc
        compute/exec/hash_join_node.cc
        compute/exec/key_hash.cc
        compute/exec/key_map.cc
+       compute/exec/map_node.cc
        compute/exec/order_by_impl.cc
        compute/exec/partition_util.cc
        compute/exec/options.cc
        compute/exec/project_node.cc
+       compute/exec/query_context.cc
        compute/exec/sink_node.cc
        compute/exec/source_node.cc
        compute/exec/swiss_join.cc
@@ -425,6 +432,7 @@ if(ARROW_COMPUTE)
        compute/kernels/scalar_boolean.cc
        compute/kernels/scalar_cast_boolean.cc
        compute/kernels/scalar_cast_dictionary.cc
+       compute/kernels/scalar_cast_extension.cc
        compute/kernels/scalar_cast_internal.cc
        compute/kernels/scalar_cast_nested.cc
        compute/kernels/scalar_cast_numeric.cc
@@ -434,6 +442,7 @@ if(ARROW_COMPUTE)
        compute/kernels/scalar_if_else.cc
        compute/kernels/scalar_nested.cc
        compute/kernels/scalar_random.cc
+       compute/kernels/scalar_round.cc
        compute/kernels/scalar_set_lookup.cc
        compute/kernels/scalar_string_ascii.cc
        compute/kernels/scalar_string_utf8.cc
@@ -445,7 +454,9 @@ if(ARROW_COMPUTE)
        compute/kernels/vector_cumulative_ops.cc
        compute/kernels/vector_hash.cc
        compute/kernels/vector_nested.cc
+       compute/kernels/vector_rank.cc
        compute/kernels/vector_replace.cc
+       compute/kernels/vector_select_k.cc
        compute/kernels/vector_selection.cc
        compute/kernels/vector_sort.cc
        compute/row/encode_internal.cc
@@ -551,12 +562,50 @@ else()
 endif()
 
 if(ARROW_BUILD_BUNDLED_DEPENDENCIES)
+  arrow_car(_FIRST_LIB ${ARROW_BUNDLED_STATIC_LIBS})
+  arrow_cdr(_OTHER_LIBS ${ARROW_BUNDLED_STATIC_LIBS})
+  arrow_create_merged_static_lib(arrow_bundled_dependencies
+                                 NAME
+                                 arrow_bundled_dependencies
+                                 ROOT
+                                 ${_FIRST_LIB}
+                                 TO_MERGE
+                                 ${_OTHER_LIBS})
+  # We can't use install(TARGETS) here because
+  # arrow_bundled_dependencies is an IMPORTED library.
+  get_target_property(arrow_bundled_dependencies_path arrow_bundled_dependencies
+                      IMPORTED_LOCATION)
+  install(FILES ${arrow_bundled_dependencies_path} ${INSTALL_IS_OPTIONAL}
+          DESTINATION ${CMAKE_INSTALL_LIBDIR})
   string(APPEND ARROW_PC_LIBS_PRIVATE " -larrow_bundled_dependencies")
+  list(INSERT ARROW_STATIC_INSTALL_INTERFACE_LIBS 0 "Arrow::arrow_bundled_dependencies")
 endif()
 # Need -latomic on Raspbian.
 # See also: https://issues.apache.org/jira/browse/ARROW-12860
 if(${CMAKE_SYSTEM_NAME} STREQUAL "Linux" AND ${CMAKE_SYSTEM_PROCESSOR} MATCHES "armv7")
   string(APPEND ARROW_PC_LIBS_PRIVATE " -latomic")
+  list(APPEND ARROW_SHARED_INSTALL_INTERFACE_LIBS "atomic")
+  list(APPEND ARROW_STATIC_INSTALL_INTERFACE_LIBS "atomic")
+endif()
+
+# If libarrow.a is only built, "pkg-config --cflags --libs arrow"
+# outputs build flags for static linking not shared
+# linking. ARROW_PC_* except ARROW_PC_*_PRIVATE are for the static
+# linking case.
+if(NOT ARROW_BUILD_SHARED AND ARROW_BUILD_STATIC)
+  set(ARROW_PC_CFLAGS "${ARROW_PC_CFLAGS_PRIVATE}")
+  set(ARROW_PC_CFLAGS_PRIVATE "")
+  set(ARROW_PC_LIBS "${ARROW_PC_LIBS_PRIVATE}")
+  set(ARROW_PC_LIBS_PRIVATE "")
+  set(ARROW_PC_REQUIRES "${ARROW_PC_REQUIRES_PRIVATE}")
+  set(ARROW_PC_REQUIRES_PRIVATE "")
+
+  string(APPEND ARROW_TESTING_PC_CFLAGS "${ARROW_TESTING_PC_CFLAGS_PRIVATE}")
+  set(ARROW_TESTING_PC_CFLAGS_PRIVATE "")
+else()
+  set(ARROW_PC_CFLAGS "")
+  set(ARROW_PC_LIBS "")
+  set(ARROW_PC_REQUIRES "")
 endif()
 
 add_arrow_lib(arrow
@@ -575,11 +624,12 @@ add_arrow_lib(arrow
               SHARED_LINK_FLAGS
               ${ARROW_SHARED_LINK_FLAGS}
               SHARED_LINK_LIBS
-              ${ARROW_LINK_LIBS}
+              ${ARROW_SHARED_LINK_LIBS}
               SHARED_PRIVATE_LINK_LIBS
               ${ARROW_SHARED_PRIVATE_LINK_LIBS}
               STATIC_LINK_LIBS
               ${ARROW_STATIC_LINK_LIBS}
+              STATIC_INSTALL_INTERFACE_LIBS
               ${ARROW_STATIC_INSTALL_INTERFACE_LIBS}
               SHARED_INSTALL_INTERFACE_LIBS
               ${ARROW_SHARED_INSTALL_INTERFACE_LIBS})
@@ -619,6 +669,8 @@ endif()
 
 foreach(LIB_TARGET ${ARROW_LIBRARIES})
   target_compile_definitions(${LIB_TARGET} PRIVATE ARROW_EXPORTING)
+  # C++17 is required to compile against Arrow C++ headers and libraries
+  target_compile_features(${LIB_TARGET} PUBLIC cxx_std_17)
 endforeach()
 
 if(ARROW_WITH_BACKTRACE)
@@ -629,18 +681,6 @@ if(ARROW_WITH_BACKTRACE)
       target_compile_definitions(${LIB_TARGET} PRIVATE ARROW_WITH_BACKTRACE)
     endif()
   endforeach()
-endif()
-
-if(ARROW_BUILD_BUNDLED_DEPENDENCIES)
-  arrow_car(_FIRST_LIB ${ARROW_BUNDLED_STATIC_LIBS})
-  arrow_cdr(_OTHER_LIBS ${ARROW_BUNDLED_STATIC_LIBS})
-  create_merged_static_lib(arrow_bundled_dependencies
-                           NAME
-                           arrow_bundled_dependencies
-                           ROOT
-                           ${_FIRST_LIB}
-                           TO_MERGE
-                           ${_OTHER_LIBS})
 endif()
 
 if(ARROW_TESTING)
@@ -663,10 +703,16 @@ if(ARROW_TESTING)
                 rapidjson::rapidjson
                 arrow_shared
                 GTest::gtest
+                SHARED_INSTALL_INTERFACE_LIBS
+                Arrow::arrow_shared
+                GTest::gtest
                 STATIC_LINK_LIBS
                 arrow::flatbuffers
                 rapidjson::rapidjson
                 arrow_static
+                GTest::gtest
+                STATIC_INSTALL_INTERFACE_LIBS
+                Arrow::arrow_static
                 GTest::gtest)
 
   add_custom_target(arrow_testing)
@@ -685,11 +731,11 @@ arrow_install_all_headers("arrow")
 
 config_summary_cmake_setters("${CMAKE_CURRENT_BINARY_DIR}/ArrowOptions.cmake")
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/ArrowOptions.cmake
-        DESTINATION "${ARROW_CMAKE_DIR}")
+        DESTINATION "${ARROW_CMAKE_DIR}/Arrow")
 
 # For backward compatibility for find_package(arrow)
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/arrow-config.cmake
-        DESTINATION "${ARROW_CMAKE_DIR}")
+        DESTINATION "${ARROW_CMAKE_DIR}/Arrow")
 
 #
 # Unit tests
@@ -803,10 +849,6 @@ endif()
 
 if(ARROW_ORC)
   add_subdirectory(adapters/orc)
-endif()
-
-if(ARROW_PYTHON)
-  add_subdirectory(python)
 endif()
 
 if(ARROW_TENSORFLOW)

@@ -39,8 +39,8 @@ out-of-source. If you are not familiar with this terminology:
 
 Building requires:
 
-* A C++11-enabled compiler. On Linux, gcc 4.8 and higher should be
-  sufficient. For Windows, at least Visual Studio 2017 is required.
+* A C++17-enabled compiler. On Linux, gcc 7.1 and higher should be
+  sufficient. For Windows, at least Visual Studio VS2017 is required.
 * CMake 3.5 or higher
 * On Linux and macOS, either ``make`` or ``ninja`` build utilities
 * At least 1GB of RAM for a minimal build, 4GB for a minimal  
@@ -53,6 +53,7 @@ On Ubuntu/Debian you can install the requirements with:
 
    sudo apt-get install \
         build-essential \
+        ninja-build \
         cmake
 
 On Alpine Linux:
@@ -64,6 +65,7 @@ On Alpine Linux:
            cmake \
            g++ \
            gcc \
+           ninja \
            make
            
 On Fedora Linux:
@@ -74,6 +76,7 @@ On Fedora Linux:
         cmake \
         gcc \
         gcc-c++ \
+        ninja-build \
         make
 
 On Arch Linux:
@@ -82,6 +85,7 @@ On Arch Linux:
 
    sudo pacman -S --needed \
         base-devel \
+        ninja \
         cmake
 
 On macOS, you can use `Homebrew <https://brew.sh/>`_:
@@ -298,7 +302,7 @@ Unity builds
 ~~~~~~~~~~~~
 
 The CMake
-`unity builds <https://cmake.org/cmake/help/latest/prop_tgt/UNITY_BUILD.html/>`_
+`unity builds <https://cmake.org/cmake/help/latest/prop_tgt/UNITY_BUILD.html>`_
 option can make full builds significantly faster, but it also increases the
 memory requirements.  Consider turning it on (using ``-DCMAKE_UNITY_BUILD=ON``)
 if memory consumption is not an issue.
@@ -338,11 +342,11 @@ boolean flags to ``cmake``.
 * ``-DPARQUET_REQUIRE_ENCRYPTION=ON``: Parquet Modular Encryption
 * ``-DARROW_PLASMA=ON``: Plasma Shared Memory Object Store
 * ``-DARROW_PLASMA_JAVA_CLIENT=ON``: Build Java client for Plasma
-* ``-DARROW_PYTHON=ON``: Arrow Python C++ integration library (required for
-  building pyarrow). This library must be built against the same Python version
-  for which you are building pyarrow. NumPy must also be installed. Enabling
-  this option also enables ``ARROW_COMPUTE``, ``ARROW_CSV``, ``ARROW_DATASET``,
-  ``ARROW_FILESYSTEM``, ``ARROW_HDFS``, and ``ARROW_JSON``.
+* ``-DARROW_PYTHON=ON``: This option is deprecated since 10.0.0. This
+  will be removed in a future release. Use CMake presets instead. Or
+  you can enable ``ARROW_COMPUTE``, ``ARROW_CSV``, ``ARROW_DATASET``,
+  ``ARROW_FILESYSTEM``, ``ARROW_HDFS``, and ``ARROW_JSON`` directly
+  instead.
 * ``-DARROW_S3=ON``: Support for Amazon S3-compatible filesystems
 * ``-DARROW_WITH_RE2=ON`` Build with support for regular expressions using the re2 
   library, on by default and used when ``ARROW_COMPUTE`` or ``ARROW_GANDIVA`` is ``ON``
@@ -364,6 +368,9 @@ Some features of the core Arrow shared library can be switched off for improved
 build times if they are not required for your application:
 
 * ``-DARROW_IPC=ON``: build the IPC extensions
+
+.. warning::
+   Plasma is deprecated as of Arrow 10.0.0, and will be removed in 12.0.0 or so.
 
 Optional Targets
 ~~~~~~~~~~~~~~~~

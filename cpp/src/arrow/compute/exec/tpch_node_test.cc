@@ -17,26 +17,30 @@
 
 #include <gmock/gmock-matchers.h>
 
+#include <cctype>
+#include <memory>
+#include <regex>
+#include <string>
+#include <unordered_set>
+
 #include "arrow/compute/exec/options.h"
 #include "arrow/compute/exec/test_util.h"
 #include "arrow/compute/exec/tpch_node.h"
 #include "arrow/compute/exec/util.h"
-#include "arrow/compute/kernels/row_encoder.h"
+#include "arrow/compute/kernels/row_encoder_internal.h"
 #include "arrow/compute/kernels/test_util.h"
 #include "arrow/testing/gtest_util.h"
 #include "arrow/testing/matchers.h"
 #include "arrow/testing/random.h"
 #include "arrow/util/checked_cast.h"
-#include "arrow/util/make_unique.h"
 #include "arrow/util/pcg_random.h"
+#include "arrow/util/string.h"
 #include "arrow/util/thread_pool.h"
 
-#include <cctype>
-#include <regex>
-#include <string>
-#include <unordered_set>
-
 namespace arrow {
+
+using internal::StartsWith;
+
 namespace compute {
 namespace internal {
 
@@ -50,7 +54,7 @@ using TableNodeFn = Result<ExecNode*> (TpchGen::*)(std::vector<std::string>);
 constexpr double kDefaultScaleFactor = 0.1;
 
 Status AddTableAndSinkToPlan(ExecPlan& plan, TpchGen& gen,
-                             AsyncGenerator<util::optional<ExecBatch>>& sink_gen,
+                             AsyncGenerator<std::optional<ExecBatch>>& sink_gen,
                              TableNodeFn table) {
   ARROW_ASSIGN_OR_RAISE(ExecNode * table_node, ((gen.*table)({})));
   Declaration sink("sink", {Declaration::Input(table_node)}, SinkNodeOptions{&sink_gen});
@@ -61,10 +65,10 @@ Status AddTableAndSinkToPlan(ExecPlan& plan, TpchGen& gen,
 Result<std::vector<ExecBatch>> GenerateTable(TableNodeFn table,
                                              double scale_factor = kDefaultScaleFactor) {
   ExecContext ctx(default_memory_pool(), arrow::internal::GetCpuThreadPool());
-  ARROW_ASSIGN_OR_RAISE(std::shared_ptr<ExecPlan> plan, ExecPlan::Make(&ctx));
+  ARROW_ASSIGN_OR_RAISE(std::shared_ptr<ExecPlan> plan, ExecPlan::Make(ctx));
   ARROW_ASSIGN_OR_RAISE(std::unique_ptr<TpchGen> gen,
                         TpchGen::Make(plan.get(), scale_factor));
-  AsyncGenerator<util::optional<ExecBatch>> sink_gen;
+  AsyncGenerator<std::optional<ExecBatch>> sink_gen;
   ARROW_RETURN_NOT_OK(AddTableAndSinkToPlan(*plan, *gen, sink_gen, table));
   auto fut = StartAndCollect(plan.get(), sink_gen);
   return fut.MoveResult();
@@ -94,15 +98,15 @@ void VerifyUniqueKey(std::unordered_set<int32_t>* seen, const Datum& d, int32_t 
   }
 }
 
-void VerifyStringAndNumber_Single(const util::string_view& row,
-                                  const util::string_view& prefix, const int64_t i,
-                                  const int32_t* nums, bool verify_padding) {
-  ASSERT_TRUE(row.starts_with(prefix)) << row << ", prefix=" << prefix << ", i=" << i;
+void VerifyStringAndNumber_Single(std::string_view row, std::string_view prefix,
+                                  const int64_t i, const int32_t* nums,
+                                  bool verify_padding) {
+  ASSERT_TRUE(StartsWith(row, prefix)) << row << ", prefix=" << prefix << ", i=" << i;
   const char* num_str = row.data() + prefix.size();
   const char* num_str_end = row.data() + row.size();
   int64_t num = 0;
   // Parse the number out; note that it can be padded with NUL chars at the end
-  for (; *num_str && num_str < num_str_end; num_str++) {
+  for (; num_str < num_str_end && *num_str; num_str++) {
     num *= 10;
     ASSERT_TRUE(std::isdigit(*num_str)) << row << ", prefix=" << prefix << ", i=" << i;
     num += *num_str - '0';
@@ -124,7 +128,7 @@ void VerifyStringAndNumber_Single(const util::string_view& row,
 // corresponding row in numbers. Some TPC-H data is padded to 9 zeros, which this function
 // can optionally verify as well. This string function verifies fixed width columns.
 void VerifyStringAndNumber_FixedWidth(const Datum& strings, const Datum& numbers,
-                                      int byte_width, const util::string_view& prefix,
+                                      int byte_width, std::string_view prefix,
                                       bool verify_padding = true) {
   int64_t length = strings.length();
   const char* str = reinterpret_cast<const char*>(strings.array()->buffers[1]->data());
@@ -137,15 +141,14 @@ void VerifyStringAndNumber_FixedWidth(const Datum& strings, const Datum& numbers
 
   for (int64_t i = 0; i < length; i++) {
     const char* row = str + i * byte_width;
-    util::string_view view(row, byte_width);
+    std::string_view view(row, byte_width);
     VerifyStringAndNumber_Single(view, prefix, i, nums, verify_padding);
   }
 }
 
 // Same as above but for variable length columns
 void VerifyStringAndNumber_Varlen(const Datum& strings, const Datum& numbers,
-                                  const util::string_view& prefix,
-                                  bool verify_padding = true) {
+                                  std::string_view prefix, bool verify_padding = true) {
   int64_t length = strings.length();
   const int32_t* offsets =
       reinterpret_cast<const int32_t*>(strings.array()->buffers[1]->data());
@@ -160,7 +163,7 @@ void VerifyStringAndNumber_Varlen(const Datum& strings, const Datum& numbers,
   for (int64_t i = 0; i < length; i++) {
     int32_t start = offsets[i];
     int32_t str_len = offsets[i + 1] - offsets[i];
-    util::string_view view(str + start, str_len);
+    std::string_view view(str + start, str_len);
     VerifyStringAndNumber_Single(view, prefix, i, nums, verify_padding);
   }
 }
@@ -253,7 +256,7 @@ void VerifyCorrectNumberOfWords_Varlen(const Datum& d, int num_words) {
     int32_t start = offsets[i];
     int32_t end = offsets[i + 1];
     int32_t str_len = end - start;
-    util::string_view view(str + start, str_len);
+    std::string_view view(str + start, str_len);
     bool is_only_alphas_or_spaces = true;
     for (const char& c : view) {
       bool is_space = c == ' ';
@@ -300,14 +303,14 @@ void VerifyOneOf(const Datum& d, const std::unordered_set<char>& possibilities) 
 
 // Verifies that each fixed-width row is one of the possibilities
 void VerifyOneOf(const Datum& d, int32_t byte_width,
-                 const std::unordered_set<util::string_view>& possibilities) {
+                 const std::unordered_set<std::string_view>& possibilities) {
   int64_t length = d.length();
   const char* col = reinterpret_cast<const char*>(d.array()->buffers[1]->data());
   for (int64_t i = 0; i < length; i++) {
     const char* row = col + i * byte_width;
     int32_t row_len = 0;
-    while (row[row_len] && row_len < byte_width) row_len++;
-    util::string_view view(row, row_len);
+    while (row_len < byte_width && row[row_len]) row_len++;
+    std::string_view view(row, row_len);
     ASSERT_TRUE(possibilities.find(view) != possibilities.end())
         << view << " is not a valid string.";
   }
@@ -331,10 +334,10 @@ void CountModifiedComments(const Datum& d, int* good_count, int* bad_count) {
   for (int64_t i = 0; i < length; i++) {
     const char* row = str + offsets[i];
     int32_t row_length = offsets[i + 1] - offsets[i];
-    util::string_view view(row, row_length);
-    bool customer = view.find("Customer") != util::string_view::npos;
-    bool recommends = view.find("Recommends") != util::string_view::npos;
-    bool complaints = view.find("Complaints") != util::string_view::npos;
+    std::string_view view(row, row_length);
+    bool customer = view.find("Customer") != std::string_view::npos;
+    bool recommends = view.find("Recommends") != std::string_view::npos;
+    bool complaints = view.find("Complaints") != std::string_view::npos;
     if (customer) {
       ASSERT_TRUE(recommends ^ complaints);
       if (recommends) *good_count += 1;
@@ -618,9 +621,9 @@ TEST(TpchNode, AllTables) {
       &VerifyOrders,   &VerifyLineitem, &VerifyNation,   &VerifyRegion,
   };
 
-  std::array<AsyncGenerator<util::optional<ExecBatch>>, kNumTables> gens;
+  std::array<AsyncGenerator<std::optional<ExecBatch>>, kNumTables> gens;
   ExecContext ctx(default_memory_pool(), arrow::internal::GetCpuThreadPool());
-  ASSERT_OK_AND_ASSIGN(std::shared_ptr<ExecPlan> plan, ExecPlan::Make(&ctx));
+  ASSERT_OK_AND_ASSIGN(std::shared_ptr<ExecPlan> plan, ExecPlan::Make(ctx));
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<TpchGen> gen,
                        TpchGen::Make(plan.get(), kScaleFactor));
   for (int i = 0; i < kNumTables; i++) {
@@ -628,7 +631,7 @@ TEST(TpchNode, AllTables) {
   }
 
   ASSERT_OK(plan->Validate());
-  ASSERT_OK(plan->StartProducing());
+  plan->StartProducing();
   ASSERT_OK(plan->finished().status());
   for (int i = 0; i < kNumTables; i++) {
     auto fut = CollectAsyncGenerator(gens[i]);

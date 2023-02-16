@@ -17,6 +17,7 @@
 
 #include "arrow/compute/exec/expression.h"
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -30,10 +31,11 @@
 #include "arrow/compute/function_internal.h"
 #include "arrow/compute/registry.h"
 #include "arrow/testing/gtest_util.h"
-#include "arrow/util/make_unique.h"
 
 using testing::HasSubstr;
 using testing::UnorderedElementsAreArray;
+
+using namespace std::chrono_literals;  // NOLINT build/namespaces
 
 namespace arrow {
 
@@ -57,6 +59,8 @@ const std::shared_ptr<Schema> kBoringSchema = schema({
     field("dict_str", dictionary(int32(), utf8())),
     field("dict_i32", dictionary(int32(), int32())),
     field("ts_ns", timestamp(TimeUnit::NANO)),
+    field("ts_s", timestamp(TimeUnit::SECOND)),
+    field("binary", binary()),
 });
 
 #define EXPECT_OK ARROW_EXPECT_OK
@@ -68,6 +72,10 @@ Expression cast(Expression argument, std::shared_ptr<DataType> to_type) {
 
 Expression true_unless_null(Expression argument) {
   return call("true_unless_null", {std::move(argument)});
+}
+
+Expression add(Expression l, Expression r) {
+  return call("add", {std::move(l), std::move(r)});
 }
 
 template <typename Actual, typename Expected>
@@ -86,7 +94,7 @@ void ExpectResultsEqual(Actual&& actual, Expected&& expected) {
   }
 }
 
-const auto no_change = util::nullopt;
+const auto no_change = std::nullopt;
 
 TEST(ExpressionUtils, Comparison) {
   auto Expect = [](Result<std::string> expected, Datum l, Datum r) {
@@ -122,7 +130,7 @@ TEST(ExpressionUtils, Comparison) {
 }
 
 TEST(ExpressionUtils, StripOrderPreservingCasts) {
-  auto Expect = [](Expression expr, util::optional<Expression> expected_stripped) {
+  auto Expect = [](Expression expr, std::optional<Expression> expected_stripped) {
     ASSERT_OK_AND_ASSIGN(expr, expr.Bind(*kBoringSchema));
     if (!expected_stripped) {
       expected_stripped = expr;
@@ -242,7 +250,7 @@ class WidgetifyOptionsType : public FunctionOptionsType {
   }
   std::unique_ptr<FunctionOptions> Copy(const FunctionOptions& options) const override {
     const auto& opts = static_cast<const WidgetifyOptions&>(options);
-    return arrow::internal::make_unique<WidgetifyOptions>(opts.really);
+    return std::make_unique<WidgetifyOptions>(opts.really);
   }
 };
 WidgetifyOptions::WidgetifyOptions(bool really)
@@ -259,10 +267,10 @@ TEST(Expression, ToString) {
   EXPECT_EQ(literal(std::make_shared<BinaryScalar>(Buffer::FromString("az"))).ToString(),
             "\"617A\"");
 
-  auto ts = *MakeScalar("1990-10-23 10:23:33")->CastTo(timestamp(TimeUnit::NANO));
+  auto ts = *TimestampScalar::FromISO8601("1990-10-23 10:23:33", TimeUnit::NANO);
   EXPECT_EQ(literal(ts).ToString(), "1990-10-23 10:23:33.000000000");
 
-  EXPECT_EQ(call("add", {literal(3), field_ref("beta")}).ToString(), "add(3, beta)");
+  EXPECT_EQ(add(literal(3), field_ref("beta")).ToString(), "add(3, beta)");
 
   auto in_12 = call("index_in", {field_ref("beta")},
                     compute::SetLookupOptions{ArrayFromJSON(int32(), "[1,2]")});
@@ -285,8 +293,7 @@ TEST(Expression, ToString) {
       "allow_time_overflow=false, allow_decimal_truncate=false, "
       "allow_float_truncate=false, allow_invalid_utf8=false})");
 
-  // NB: corrupted for nullary functions but we don't have any of those
-  EXPECT_EQ(call("widgetify", {}).ToString(), "widgetif)");
+  EXPECT_EQ(call("widgetify", {}).ToString(), "widgetify()");
   EXPECT_EQ(
       call("widgetify", {literal(1)}, std::make_shared<WidgetifyOptions>()).ToString(),
       "widgetify(1, widgetify)");
@@ -313,30 +320,49 @@ TEST(Expression, ToString) {
                 })
                 .ToString(),
             "{a=a, renamed_a=a, three=3, b=" + in_12.ToString() + "}");
+
+  EXPECT_EQ(call("round", {literal(3.14)}, compute::RoundOptions()).ToString(),
+            "round(3.14, {ndigits=0, round_mode=HALF_TO_EVEN})");
+  EXPECT_EQ(call("random", {}, compute::RandomOptions()).ToString(),
+            "random({initializer=SystemRandom, seed=0})");
 }
 
 TEST(Expression, Equality) {
   EXPECT_EQ(literal(1), literal(1));
   EXPECT_NE(literal(1), literal(2));
 
+  // NaN literals (of the same type) should be equal.  This allows, for example,
+  // the expression x == NaN to equal itself.
+  auto double_nan_literal = literal(std::numeric_limits<double>::quiet_NaN());
+  auto float_nan_literal = literal(std::numeric_limits<float>::quiet_NaN());
+  EXPECT_EQ(double_nan_literal, double_nan_literal);
+  EXPECT_NE(double_nan_literal, float_nan_literal);
+  // The literals may be equal but the values should not be
+  Expression nans_eq = equal(double_nan_literal, double_nan_literal);
+  ASSERT_OK_AND_ASSIGN(nans_eq, nans_eq.Bind(*kBoringSchema));
+  ASSERT_OK_AND_ASSIGN(Datum nans_eq_rsp, ExecuteScalarExpression(nans_eq, ExecBatch()));
+  EXPECT_FALSE(nans_eq_rsp.scalar_as<BooleanScalar>().value);
+  if (std::numeric_limits<double>::has_signaling_NaN) {
+    // We intentionally do not care about signaling and may even discard it on conversion.
+    EXPECT_EQ(literal(std::numeric_limits<double>::quiet_NaN()),
+              literal(std::numeric_limits<double>::signaling_NaN()));
+  }
+
   EXPECT_EQ(field_ref("a"), field_ref("a"));
   EXPECT_NE(field_ref("a"), field_ref("b"));
   EXPECT_NE(field_ref("a"), literal(2));
 
-  EXPECT_EQ(call("add", {literal(3), field_ref("a")}),
-            call("add", {literal(3), field_ref("a")}));
-  EXPECT_NE(call("add", {literal(3), field_ref("a")}),
-            call("add", {literal(2), field_ref("a")}));
-  EXPECT_NE(call("add", {field_ref("a"), literal(3)}),
-            call("add", {literal(3), field_ref("a")}));
+  EXPECT_EQ(add(literal(3), field_ref("a")), add(literal(3), field_ref("a")));
+  EXPECT_NE(add(literal(3), field_ref("a")), add(literal(2), field_ref("a")));
+  EXPECT_NE(add(field_ref("a"), literal(3)), add(literal(3), field_ref("a")));
 
   auto in_123 = compute::SetLookupOptions{ArrayFromJSON(int32(), "[1,2,3]")};
-  EXPECT_EQ(call("add", {literal(3), call("index_in", {field_ref("beta")}, in_123)}),
-            call("add", {literal(3), call("index_in", {field_ref("beta")}, in_123)}));
+  EXPECT_EQ(add(literal(3), call("index_in", {field_ref("beta")}, in_123)),
+            add(literal(3), call("index_in", {field_ref("beta")}, in_123)));
 
   auto in_12 = compute::SetLookupOptions{ArrayFromJSON(int32(), "[1,2]")};
-  EXPECT_NE(call("add", {literal(3), call("index_in", {field_ref("beta")}, in_12)}),
-            call("add", {literal(3), call("index_in", {field_ref("beta")}, in_123)}));
+  EXPECT_NE(add(literal(3), call("index_in", {field_ref("beta")}, in_12)),
+            add(literal(3), call("index_in", {field_ref("beta")}, in_123)));
 
   EXPECT_EQ(cast(field_ref("a"), int32()), cast(field_ref("a"), int32()));
   EXPECT_NE(cast(field_ref("a"), int32()), cast(field_ref("a"), int64()));
@@ -467,7 +493,7 @@ TEST(Expression, FieldsInExpression) {
 TEST(Expression, ExpressionHasFieldRefs) {
   EXPECT_FALSE(ExpressionHasFieldRefs(literal(true)));
 
-  EXPECT_FALSE(ExpressionHasFieldRefs(call("add", {literal(1), literal(3)})));
+  EXPECT_FALSE(ExpressionHasFieldRefs(add(literal(1), literal(3))));
 
   EXPECT_TRUE(ExpressionHasFieldRefs(field_ref("a")));
 
@@ -499,7 +525,7 @@ TEST(Expression, BindLiteral) {
   }
 }
 
-void ExpectBindsTo(Expression expr, util::optional<Expression> expected,
+void ExpectBindsTo(Expression expr, std::optional<Expression> expected,
                    Expression* bound_out = nullptr,
                    const Schema& schema = *kBoringSchema) {
   if (!expected) {
@@ -554,17 +580,16 @@ TEST(Expression, BindNestedFieldRef) {
 }
 
 TEST(Expression, BindCall) {
-  auto expr = call("add", {field_ref("i32"), field_ref("i32_req")});
+  auto expr = add(field_ref("i32"), field_ref("i32_req"));
   EXPECT_FALSE(expr.IsBound());
 
   ExpectBindsTo(expr, no_change, &expr);
   EXPECT_TRUE(expr.type()->Equals(*int32()));
 
-  ExpectBindsTo(call("add", {field_ref("f32"), literal(3)}),
-                call("add", {field_ref("f32"), literal(3.0F)}));
+  ExpectBindsTo(add(field_ref("f32"), literal(3)), add(field_ref("f32"), literal(3.0F)));
 
-  ExpectBindsTo(call("add", {field_ref("i32"), literal(3.5F)}),
-                call("add", {cast(field_ref("i32"), float32()), literal(3.5F)}));
+  ExpectBindsTo(add(field_ref("i32"), literal(3.5F)),
+                add(cast(field_ref("i32"), float32()), literal(3.5F)));
 }
 
 TEST(Expression, BindWithImplicitCasts) {
@@ -586,8 +611,36 @@ TEST(Expression, BindWithImplicitCasts) {
     ExpectBindsTo(cmp(field_ref("dict_str"), field_ref("str")),
                   cmp(cast(field_ref("dict_str"), utf8()), field_ref("str")));
 
+    // Should prefer the literal
     ExpectBindsTo(cmp(field_ref("dict_i32"), literal(int64_t(4))),
-                  cmp(cast(field_ref("dict_i32"), int64()), literal(int64_t(4))));
+                  cmp(field_ref("dict_i32"), literal(int32_t(4))));
+    ExpectBindsTo(cmp(field_ref("dict_i32"), literal(int64_t(4))),
+                  cmp(field_ref("dict_i32"), literal(int32_t(4))));
+    ExpectBindsTo(cmp(field_ref("ts_s"),
+                      literal(std::make_shared<TimestampScalar>(0, TimeUnit::NANO))),
+                  cmp(field_ref("ts_s"),
+                      literal(std::make_shared<TimestampScalar>(0, TimeUnit::SECOND))));
+    ExpectBindsTo(
+        cmp(field_ref("binary"), literal(std::make_shared<LargeBinaryScalar>("foo"))),
+        cmp(field_ref("binary"), literal(std::make_shared<BinaryScalar>("foo"))));
+
+    // We will not implicitly cast a literal from signed to unsigned or vice versa
+    ExpectBindsTo(cmp(field_ref("i8"), literal(uint8_t(4))),
+                  cmp(cast(field_ref("i8"), int16()), literal(int16_t(4))));
+    ExpectBindsTo(cmp(field_ref("u32"), literal(int64_t(4))),
+                  cmp(cast(field_ref("u32"), int64()), literal(int64_t(4))));
+
+    // NaN / Inf can be float or double as needed
+    ExpectBindsTo(
+        cmp(field_ref("f32"), literal(std::numeric_limits<double>::quiet_NaN())),
+        cmp(field_ref("f32"), literal(std::numeric_limits<float>::quiet_NaN())));
+    ExpectBindsTo(cmp(field_ref("f32"), literal(std::numeric_limits<double>::infinity())),
+                  cmp(field_ref("f32"), literal(std::numeric_limits<float>::infinity())));
+
+    // Bit of an odd case, both fields are cast
+    ExpectBindsTo(cmp(field_ref("i32"), literal(std::make_shared<DoubleScalar>(10.0))),
+                  cmp(cast(field_ref("i32"), float32()),
+                      literal(std::make_shared<FloatScalar>(10.0f))));
   }
 
   compute::SetLookupOptions in_a{ArrayFromJSON(utf8(), R"(["a"])")};
@@ -598,10 +651,9 @@ TEST(Expression, BindWithImplicitCasts) {
 }
 
 TEST(Expression, BindNestedCall) {
-  auto expr =
-      call("add", {field_ref("a"),
-                   call("subtract", {call("multiply", {field_ref("b"), field_ref("c")}),
-                                     field_ref("d")})});
+  auto expr = add(field_ref("a"),
+                  call("subtract", {call("multiply", {field_ref("b"), field_ref("c")}),
+                                    field_ref("d")}));
   EXPECT_FALSE(expr.IsBound());
 
   ASSERT_OK_AND_ASSIGN(expr,
@@ -745,7 +797,7 @@ void ExpectExecute(Expression expr, Datum in, Datum* actual_out = NULLPTR) {
 }
 
 TEST(Expression, ExecuteCall) {
-  ExpectExecute(call("add", {field_ref("a"), literal(3.5)}),
+  ExpectExecute(add(field_ref("a"), literal(3.5)),
                 ArrayFromJSON(struct_({field("a", float64())}), R"([
     {"a": 6.125},
     {"a": 0.0},
@@ -753,7 +805,7 @@ TEST(Expression, ExecuteCall) {
   ])"));
 
   ExpectExecute(
-      call("add", {field_ref("a"), call("subtract", {literal(3.5), field_ref("b")})}),
+      add(field_ref("a"), call("subtract", {literal(3.5), field_ref("b")})),
       ArrayFromJSON(struct_({field("a", float64()), field("b", float64())}), R"([
     {"a": 6.125, "b": 3.375},
     {"a": 0.0,   "b": 1},
@@ -768,20 +820,19 @@ TEST(Expression, ExecuteCall) {
     {"a": "12/11/1900"}
   ])"));
 
-  ExpectExecute(project({call("add", {field_ref("a"), literal(3.5)})}, {"a + 3.5"}),
+  ExpectExecute(project({add(field_ref("a"), literal(3.5))}, {"a + 3.5"}),
                 ArrayFromJSON(struct_({field("a", float64())}), R"([
     {"a": 6.125},
     {"a": 0.0},
     {"a": -1}
   ])"));
 
-  ExpectExecute(
-      call("add", {field_ref(FieldRef("a", "a")), field_ref(FieldRef("a", "b"))}),
-      ArrayFromJSON(struct_({field("a", struct_({
-                                            field("a", float64()),
-                                            field("b", float64()),
-                                        }))}),
-                    R"([
+  ExpectExecute(add(field_ref(FieldRef("a", "a")), field_ref(FieldRef("a", "b"))),
+                ArrayFromJSON(struct_({field("a", struct_({
+                                                      field("a", float64()),
+                                                      field("b", float64()),
+                                                  }))}),
+                              R"([
     {"a": {"a": 6.125, "b": 3.375}},
     {"a": {"a": 0.0,   "b": 1}},
     {"a": {"a": -1,    "b": 4.75}}
@@ -850,24 +901,30 @@ TEST(Expression, FoldConstants) {
   ExpectFoldsTo(field_ref("i32"), field_ref("i32"));
 
   // call against literals (3 + 2 == 5)
-  ExpectFoldsTo(call("add", {literal(3), literal(2)}), literal(5));
+  ExpectFoldsTo(add(literal(3), literal(2)), literal(5));
 
-  ExpectFoldsTo(call("equal", {literal(3), literal(3)}), literal(true));
+  ExpectFoldsTo(equal(literal(3), literal(3)), literal(true));
+
+  // addition of durations folds as expected
+  ExpectFoldsTo(add(literal(5min), literal(5min)), literal(10min));
+
+  // addition of duration, timestamp folds as expected
+  auto ts = *TimestampScalar::FromISO8601("1990-10-23 10:23:33", TimeUnit::SECOND);
+  auto ts_two_hours_later =
+      *TimestampScalar::FromISO8601("1990-10-23 12:23:33", TimeUnit::SECOND);
+  ExpectFoldsTo(add(literal(2h), literal(ts)), literal(ts_two_hours_later));
+  ExpectFoldsTo(add(literal(ts), literal(2h)), literal(ts_two_hours_later));
 
   // call against literal and field_ref
-  ExpectFoldsTo(call("add", {literal(3), field_ref("i32")}),
-                call("add", {literal(3), field_ref("i32")}));
+  ExpectFoldsTo(add(literal(3), field_ref("i32")), add(literal(3), field_ref("i32")));
 
   // nested call against literals ((8 - (2 * 3)) + 2 == 4)
-  ExpectFoldsTo(call("add",
-                     {
-                         call("subtract",
-                              {
-                                  literal(8),
-                                  call("multiply", {literal(2), literal(3)}),
-                              }),
-                         literal(2),
-                     }),
+  ExpectFoldsTo(add(call("subtract",
+                         {
+                             literal(8),
+                             call("multiply", {literal(2), literal(3)}),
+                         }),
+                    literal(2)),
                 literal(4));
 
   // INTERSECTION null handling and null input -> null output
@@ -877,40 +934,34 @@ TEST(Expression, FoldConstants) {
   // nested call against literals with one field_ref
   // (i32 - (2 * 3)) + 2 == (i32 - 6) + 2
   // NB this could be improved further by using associativity of addition; another pass
-  ExpectFoldsTo(call("add",
-                     {
-                         call("subtract",
-                              {
-                                  field_ref("i32"),
-                                  call("multiply", {literal(2), literal(3)}),
-                              }),
-                         literal(2),
-                     }),
-                call("add", {
-                                call("subtract",
-                                     {
-                                         field_ref("i32"),
-                                         literal(6),
-                                     }),
-                                literal(2),
-                            }));
+  ExpectFoldsTo(add(call("subtract",
+                         {
+                             field_ref("i32"),
+                             call("multiply", {literal(2), literal(3)}),
+                         }),
+                    literal(2)),
+                add(call("subtract",
+                         {
+                             field_ref("i32"),
+                             literal(6),
+                         }),
+                    literal(2)));
 
   compute::SetLookupOptions in_123(ArrayFromJSON(int32(), "[1,2,3]"));
 
   ExpectFoldsTo(call("is_in", {literal(2)}, in_123), literal(true));
 
   ExpectFoldsTo(
-      call("is_in",
-           {call("add", {field_ref("i32"), call("multiply", {literal(2), literal(3)})})},
+      call("is_in", {add(field_ref("i32"), call("multiply", {literal(2), literal(3)}))},
            in_123),
-      call("is_in", {call("add", {field_ref("i32"), literal(6)})}, in_123));
+      call("is_in", {add(field_ref("i32"), literal(6))}, in_123));
 }
 
 TEST(Expression, FoldConstantsBoolean) {
   // test and_kleene/or_kleene-specific optimizations
   auto one = literal(1);
   auto two = literal(2);
-  auto whatever = equal(call("add", {one, field_ref("i32")}), two);
+  auto whatever = equal(add(one, field_ref("i32")), two);
 
   auto true_ = literal(true);
   auto false_ = literal(false);
@@ -922,6 +973,24 @@ TEST(Expression, FoldConstantsBoolean) {
   ExpectFoldsTo(or_(true_, whatever), true_);
   ExpectFoldsTo(or_(false_, whatever), whatever);
   ExpectFoldsTo(or_(whatever, whatever), whatever);
+}
+
+void ExpectRemovesRefsTo(Expression expr, Expression expected,
+                         const Schema& schema = *kBoringSchema) {
+  ASSERT_OK_AND_ASSIGN(expr, expr.Bind(schema));
+  ASSERT_OK_AND_ASSIGN(expected, expected.Bind(schema));
+
+  ASSERT_OK_AND_ASSIGN(auto without_named_refs, RemoveNamedRefs(expr));
+
+  EXPECT_EQ(without_named_refs, expected);
+}
+
+TEST(Expression, RemoveNamedRefs) {
+  ExpectRemovesRefsTo(field_ref("i32"), field_ref(2));
+  ExpectRemovesRefsTo(call("add", {literal(4), field_ref("i32")}),
+                      call("add", {literal(4), field_ref(2)}));
+  auto nested_schema = Schema({field("a", struct_({field("b", int32())}))});
+  ExpectRemovesRefsTo(field_ref({"a", "b"}), field_ref({0, 0}), nested_schema);
 }
 
 TEST(Expression, ExtractKnownFieldValues) {
@@ -1006,24 +1075,19 @@ TEST(Expression, ReplaceFieldsWithKnownValues) {
       DictionaryScalar::Make(MakeScalar(0), ArrayFromJSON(utf8(), R"(["3"])"))};
   ExpectReplacesTo(field_ref("dict_str"), {{"dict_str", dict_str}}, literal(dict_str));
 
-  ExpectReplacesTo(call("add",
-                        {
-                            call("subtract",
-                                 {
-                                     field_ref("i32"),
-                                     call("multiply", {literal(2), literal(3)}),
-                                 }),
-                            literal(2),
-                        }),
+  ExpectReplacesTo(add(call("subtract",
+                            {
+                                field_ref("i32"),
+                                call("multiply", {literal(2), literal(3)}),
+                            }),
+                       literal(2)),
                    i32_is_3,
-                   call("add", {
-                                   call("subtract",
-                                        {
-                                            literal(3),
-                                            call("multiply", {literal(2), literal(3)}),
-                                        }),
-                                   literal(2),
-                               }));
+                   add(call("subtract",
+                            {
+                                literal(3),
+                                call("multiply", {literal(2), literal(3)}),
+                            }),
+                       literal(2)));
 
   std::unordered_map<FieldRef, Datum, FieldRef::Hash> i32_valid_str_null{
       {"i32", Datum(3)}, {"str", MakeNullScalar(utf8())}};
@@ -1097,6 +1161,13 @@ TEST(Expression, CanonicalizeAnd) {
   ExpectCanonicalizesTo(is_valid(and_(b, true_)), is_valid(and_(true_, b)));
 }
 
+TEST(Expression, CanonicalizeAdd) {
+  auto ts = field_ref("ts_s");
+  ExpectCanonicalizesTo(add(ts, literal(5min)), add(literal(5min), ts));
+  ExpectCanonicalizesTo(add(add(ts, literal(5min)), add(literal(5min), literal(5min))),
+                        add(add(add(literal(5min), literal(5min)), literal(5min)), ts));
+}
+
 TEST(Expression, CanonicalizeComparison) {
   ExpectCanonicalizesTo(equal(literal(1), field_ref("i32")),
                         equal(field_ref("i32"), literal(1)));
@@ -1141,7 +1212,7 @@ TEST(Expression, SingleComparisonGuarantees) {
 
   // i32 is guaranteed equal to 3, so the projection can just materialize that constant
   // and need not incur IO
-  Simplify{project({call("add", {i32, literal(1)})}, {"i32 + 1"})}
+  Simplify{project({add(i32, literal(1))}, {"i32 + 1"})}
       .WithGuarantee(equal(i32, literal(3)))
       .Expect(literal(
           std::make_shared<StructScalar>(ScalarVector{std::make_shared<Int32Scalar>(4)},
@@ -1357,6 +1428,10 @@ TEST(Expression, SimplifyWithValidityGuarantee) {
       .WithGuarantee(is_null(field_ref("i32")))
       .Expect(literal(false));
 
+  Simplify{{true_unless_null(field_ref("i32"))}}
+      .WithGuarantee(is_null(field_ref("i32")))
+      .Expect(null_literal(boolean()));
+
   Simplify{is_valid(field_ref("i32"))}
       .WithGuarantee(is_valid(field_ref("i32")))
       .Expect(literal(true));
@@ -1372,6 +1447,21 @@ TEST(Expression, SimplifyWithValidityGuarantee) {
   Simplify{true_unless_null(field_ref("i32"))}
       .WithGuarantee(is_valid(field_ref("i32")))
       .Expect(literal(true));
+
+  Simplify{{equal(field_ref("i32"), literal(7))}}
+      .WithGuarantee(is_null(field_ref("i32")))
+      .Expect(null_literal(boolean()));
+
+  auto i32_is_2_or_null =
+      or_(equal(field_ref("i32"), literal(2)), is_null(field_ref("i32")));
+
+  Simplify{i32_is_2_or_null}
+      .WithGuarantee(is_null(field_ref("i32")))
+      .Expect(literal(true));
+
+  Simplify{{greater(field_ref("i32"), literal(7))}}
+      .WithGuarantee(is_null(field_ref("i32")))
+      .Expect(null_literal(boolean()));
 }
 
 TEST(Expression, SimplifyWithComparisonAndNullableCaveat) {

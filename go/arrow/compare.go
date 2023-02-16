@@ -118,6 +118,13 @@ func TypeEqual(left, right DataType, opts ...TypeEqualOption) bool {
 			}
 		}
 		return true
+	case *TimestampType:
+		r := right.(*TimestampType)
+		return l.Unit == r.Unit && l.TimeZone == r.TimeZone
+	case *RunEndEncodedType:
+		r := right.(*RunEndEncodedType)
+		return TypeEqual(l.Encoded(), r.Encoded(), opts...) &&
+			TypeEqual(l.runEnds, r.runEnds, opts...)
 	default:
 		return reflect.DeepEqual(left, right)
 	}

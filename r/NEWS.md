@@ -17,7 +17,176 @@
   under the License.
 -->
 
-# arrow 9.0.0.9000
+# arrow 11.0.0.9000
+
+# arrow 11.0.0.2
+
+## Breaking changes
+
+* `map_batches()` is lazy by default; it now returns a `RecordBatchReader`
+  instead of a list of `RecordBatch` objects unless `lazy = FALSE`.
+  ([#14521](https://github.com/apache/arrow/issues/14521))
+
+## New features
+
+### Docs
+
+* A substantial reorganisation, rewrite of and addition to, many of the 
+  vignettes and README. (@djnavarro, 
+  [#14514](https://github.com/apache/arrow/issues/14514))  
+
+### Reading/writing data
+
+* New functions `open_csv_dataset()`, `open_tsv_dataset()`, and 
+  `open_delim_dataset()` all wrap `open_dataset()`- they don't provide new 
+  functionality, but allow for readr-style options to be supplied, making it 
+  simpler to switch between individual file-reading and dataset 
+  functionality. ([#33614](https://github.com/apache/arrow/issues/33614))
+* User-defined null values can be set when writing CSVs both as datasets 
+  and as individual files. (@wjones127, 
+  [#14679](https://github.com/apache/arrow/issues/14679))
+* The new `col_names` parameter allows specification of column names when 
+  opening a CSV dataset. (@wjones127, 
+  [#14705](https://github.com/apache/arrow/issues/14705))
+* The `parse_options`, `read_options`, and `convert_options` parameters for 
+  reading individual files (`read_*_arrow()` functions) and datasets 
+  (`open_dataset()` and the new `open_*_dataset()` functions) can be passed 
+  in as lists. ([#15270](https://github.com/apache/arrow/issues/15270))
+* File paths containing accents can be read by `read_csv_arrow()`. 
+  ([#14930](https://github.com/apache/arrow/issues/14930))
+
+### dplyr compatibility
+
+* New dplyr (1.1.0) function `join_by()` has been implemented for dplyr joins 
+  on Arrow objects (equality conditions only).  
+  ([#33664](https://github.com/apache/arrow/issues/33664))
+* Output is accurate when multiple `dplyr::group_by()`/`dplyr::summarise()` 
+  calls are used. ([#14905](https://github.com/apache/arrow/issues/14905))
+* `dplyr::summarize()` works with division when divisor is a variable. 
+  ([#14933](https://github.com/apache/arrow/issues/14933))
+* `dplyr::right_join()` correctly coalesces keys. 
+  ([#15077](https://github.com/apache/arrow/issues/15077))
+* Multiple changes to ensure compatibility with dplyr 1.1.0. 
+  (@lionel-, [#14948](https://github.com/apache/arrow/issues/14948))
+
+### Function bindings
+
+* The following functions can be used in queries on Arrow objects:
+  * `lubridate::with_tz()` and `lubridate::force_tz()` (@eitsupi, 
+  [#14093](https://github.com/apache/arrow/issues/14093))
+  * `stringr::str_remove()` and `stringr::str_remove_all()` 
+  ([#14644](https://github.com/apache/arrow/issues/14644))
+
+### Arrow object creation
+
+* Arrow Scalars can be created from `POSIXlt` objects. 
+  ([#15277](https://github.com/apache/arrow/issues/15277))
+* `Array$create()` can create Decimal arrays. 
+  ([#15211](https://github.com/apache/arrow/issues/15211))
+* `StructArray$create()` can be used to create StructArray objects. 
+  ([#14922](https://github.com/apache/arrow/issues/14922))
+* Creating an Array from an object bigger than 2^31 has correct length 
+  ([#14929](https://github.com/apache/arrow/issues/14929))
+
+### Installation
+
+* Improved offline installation using pre-downloaded binaries. 
+  (@pgramme, [#14086](https://github.com/apache/arrow/issues/14086))
+* The package can automatically link to system installations of the AWS SDK
+  for C++. (@kou, [#14235](https://github.com/apache/arrow/issues/14235))
+
+## Minor improvements and fixes
+
+* Calling `lubridate::as_datetime()` on Arrow objects can handle time in 
+  sub-seconds. (@eitsupi, 
+  [#13890](https://github.com/apache/arrow/issues/13890))
+* `head()` can be called after `as_record_batch_reader()`. 
+  ([#14518](https://github.com/apache/arrow/issues/14518))
+* `as.Date()` can go from `timestamp[us]` to `timestamp[s]`. 
+  ([#14935](https://github.com/apache/arrow/issues/14935))
+* curl timeout policy can be configured for S3. 
+  ([#15166](https://github.com/apache/arrow/issues/15166))
+* rlang dependency must be at least version 1.0.0 because of 
+  `check_dots_empty()`. (@daattali, 
+  [#14744](https://github.com/apache/arrow/issues/14744))
+
+# arrow 10.0.1
+
+Minor improvements and fixes:
+
+* Fixes for failing test after lubridate 1.9 release ([ARROW-18285](https://issues.apache.org/jira/browse/ARROW-18285))
+* Update to ensure compatibility with changes in dev purrr ([ARROW-18305](https://issues.apache.org/jira/browse/ARROW-18305))
+* Fix to correctly handle `.data` pronoun in `dplyr::group_by()` ([ARROW-18131](https://issues.apache.org/jira/browse/ARROW-18131))
+
+# arrow 10.0.0
+
+## Arrow dplyr queries
+
+Several new functions can be used in queries:
+
+* `dplyr::across()` can be used to apply the same computation across multiple
+  columns, and the `where()` selection helper is supported in `across()`;
+* `add_filename()` can be used to get the filename a row came from (only
+  available when querying `?Dataset`);
+* Added five functions in the `slice_*` family: `dplyr::slice_min()`,
+  `dplyr::slice_max()`, `dplyr::slice_head()`, `dplyr::slice_tail()`, and
+  `dplyr::slice_sample()`.
+
+The package now has documentation that lists all `dplyr` methods and R function
+mappings that are supported on Arrow data, along with notes about any
+differences in functionality between queries evaluated in R versus in Acero, the
+Arrow query engine. See `?acero`.
+
+A few new features and bugfixes were implemented for joins:
+
+* Extension arrays are now supported in joins, allowing, for example, joining
+  datasets that contain [geoarrow](https://paleolimbot.github.io/geoarrow/) data.
+* The `keep` argument is now supported, allowing separate columns for the left
+  and right hand side join keys in join output. Full joins now coalesce the
+  join keys (when `keep = FALSE`), avoiding the issue where the join keys would
+  be all `NA` for rows in the right hand side without any matches on the left.
+
+Some changes to improve the consistency of the API:
+
+* In a future release, calling `dplyr::pull()` will return a `?ChunkedArray`
+  instead of an R vector by default. The current default behavior is deprecated.
+  To update to the new behavior now, specify `pull(as_vector = FALSE)` or set
+  `options(arrow.pull_as_vector = FALSE)` globally.
+* Calling `dplyr::compute()` on a query that is grouped returns a `?Table`
+  instead of a query object.
+
+Finally, long-running queries can now be cancelled and will abort their
+computation immediately.
+
+## Arrays and tables
+
+`as_arrow_array()` can now take `blob::blob` and `?vctrs::list_of`, which
+convert to binary and list arrays, respectively. Also fixed an issue where
+`as_arrow_array()` ignored type argument when passed a `StructArray`.
+
+The `unique()` function works on `?Table`, `?RecordBatch`, `?Dataset`, and
+`?RecordBatchReader`.
+
+## Reading and writing
+
+`write_feather()` can take `compression = FALSE` to choose writing uncompressed files.
+
+Also, a breaking change for IPC files in `write_dataset()`: passing
+`"ipc"` or  `"feather"` to `format` will now write files with `.arrow`
+extension instead of `.ipc` or `.feather`.
+
+## Installation
+
+As of version 10.0.0, `arrow` requires C++17 to build. This means that:
+
+* On Windows, you need `R >= 4.0`. Version 9.0.0 was the last version to support
+  R 3.6.
+* On CentOS 7, you can build the latest version of `arrow`,
+  but you first need to install a newer compiler than the default system compiler,
+  gcc 4.8. See `vignette("install", package = "arrow")` for guidance.
+  Note that you only need the newer compiler to build `arrow`:
+  installing a binary package, as from RStudio Package Manager,
+  or loading a package you've already installed works fine with the system defaults.
 
 # arrow 9.0.0
 
@@ -31,7 +200,7 @@
 * `map_batches()` returns a `RecordBatchReader` and requires that the function it maps returns something coercible to a `RecordBatch` through the `as_record_batch()` S3 function. It can also run in streaming fashion if passed `.lazy = TRUE`. (ARROW-15271, ARROW-16703)
 * Functions can be called with package namespace prefixes (e.g. `stringr::`, `lubridate::`) within queries. For example, `stringr::str_length` will now dispatch to the same kernel as `str_length`. (ARROW-14575)
 * Support for new functions:
-  * `lubridate::parse_date_time()` datetime parser: (ARROW-14848, ARROW-16407)
+  * `lubridate::parse_date_time()` datetime parser: (ARROW-14848, ARROW-16407, ARROW-16653)
     * `orders` with year, month, day, hours, minutes, and seconds components are supported.
     * the `orders` argument in the Arrow binding works as follows: `orders` are transformed into `formats` which subsequently get applied in turn. There is no `select_formats` parameter and no inference takes place (like is the case in `lubridate::parse_date_time()`).
   * `lubridate` date and datetime parsers such as `lubridate::ymd()`, `lubridate::yq()`, and `lubridate::ymd_hms()` (ARROW-16394, ARROW-16516, ARROW-16395)
@@ -84,7 +253,7 @@
   - are supported on `RecordBatchReader`. This allows, for example, results from DuckDB
   to be streamed back into Arrow rather than materialized before continuing the pipeline.
   - no longer need to materialize the entire result table before writing to a dataset
-    if the query contains contains aggregations or joins.
+    if the query contains aggregations or joins.
   - supports `dplyr::rename_with()`.
   - `dplyr::count()` returns an ungrouped dataframe.
 * `write_dataset()` has more options for controlling row group and file sizes when
@@ -409,7 +578,7 @@ Over 100 functions can now be called on Arrow objects inside a `dplyr` verb:
 ## Python and Flight
 
 * Flight methods `flight_get()` and `flight_put()` (renamed from `push_data()` in this release) can handle both Tables and RecordBatches
-* `flight_put()` gains an `overwrite` argument to optionally check for the existence of a resource with the the same name
+* `flight_put()` gains an `overwrite` argument to optionally check for the existence of a resource with the same name
 * `list_flights()` and `flight_path_exists()` enable you to see available resources on a Flight server
 * `Schema` objects now have `r_to_py` and `py_to_r` methods
 * Schema metadata is correctly preserved when converting Tables to/from Python

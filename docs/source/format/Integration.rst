@@ -309,6 +309,17 @@ Null: ::
       "name": "null"
     }
 
+RunEndEncoded: ::
+
+    {
+      "name": "runendencoded"
+    }
+
+The ``Field``'s "children" should be exactly two child fields. The first
+child must be named "run_ends", be non-nullable and be either an ``int16``,
+``int32``, or ``int64`` type field. The second child must be named "values",
+but can be of any type.
+
 Extension types are, as in the IPC format, represented as their underlying
 storage type plus some dedicated field metadata to reconstruct the extension
 type.  For example, assuming a "uuid" extension type backed by a
@@ -455,14 +466,16 @@ Gold File Integration Tests
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Pre-generated json and arrow IPC files (both file and stream format) exist
-in the `arrow-testing <https://github.com/apache/arrow-testing>` repository
+in the `arrow-testing <https://github.com/apache/arrow-testing>`__ repository
 in the ``data/arrow-ipc-stream/integration`` directory. These serve as
 *gold* files that are assumed to be correct for use in testing. They are 
 referenced by ``runner.py`` in the code for the :ref:`Archery <archery>`
 utility. Below are the test cases which are covered by them:
 
 * Backwards Compatibility
+
   - The following cases are tested using the 0.14.1 format:
+
     + datetime
     + decimals
     + dictionaries
@@ -472,10 +485,15 @@ utility. Below are the test cases which are covered by them:
     + primitives 
     + primitive with no batches
     + primitive with zero length batches
+
   - The following is tested for 0.17.1 format:
+
     + unions
+
 * Endianness
+
   - The following cases are tested with both Little Endian and Big Endian versions for auto conversion
+
     + custom metadata
     + datetime
     + decimals
@@ -497,7 +515,10 @@ utility. Below are the test cases which are covered by them:
     + primitive batches with zero length
     + recursive nested types
     + union types
+
 * Compression tests
+
   - LZ4
   - ZSTD
+
 * Batches with Shared Dictionaries

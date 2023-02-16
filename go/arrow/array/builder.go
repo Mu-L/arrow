@@ -20,9 +20,9 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"github.com/apache/arrow/go/v10/arrow"
-	"github.com/apache/arrow/go/v10/arrow/bitutil"
-	"github.com/apache/arrow/go/v10/arrow/memory"
+	"github.com/apache/arrow/go/v12/arrow"
+	"github.com/apache/arrow/go/v12/arrow/bitutil"
+	"github.com/apache/arrow/go/v12/arrow/memory"
 	"github.com/goccy/go-json"
 )
 
@@ -73,6 +73,8 @@ type Builder interface {
 	// by the builder and resets the Builder so it can be used to build
 	// a new array.
 	NewArray() arrow.Array
+
+	UnsafeAppendBoolToBitmap(bool)
 
 	init(capacity int)
 	resize(newBits int, init func(int))
@@ -279,15 +281,6 @@ func NewBuilder(mem memory.Allocator, dtype arrow.DataType) Builder {
 	case arrow.TIME64:
 		typ := dtype.(*arrow.Time64Type)
 		return NewTime64Builder(mem, typ)
-	case arrow.INTERVAL:
-		switch dtype.(type) {
-		case *arrow.DayTimeIntervalType:
-			return NewDayTimeIntervalBuilder(mem)
-		case *arrow.MonthIntervalType:
-			return NewMonthIntervalBuilder(mem)
-		case *arrow.MonthDayNanoIntervalType:
-			return NewMonthDayNanoIntervalBuilder(mem)
-		}
 	case arrow.INTERVAL_MONTHS:
 		return NewMonthIntervalBuilder(mem)
 	case arrow.INTERVAL_DAY_TIME:
@@ -304,7 +297,7 @@ func NewBuilder(mem memory.Allocator, dtype arrow.DataType) Builder {
 		}
 	case arrow.LIST:
 		typ := dtype.(*arrow.ListType)
-		return NewListBuilder(mem, typ.Elem())
+		return NewListBuilderWithField(mem, typ.ElemField())
 	case arrow.STRUCT:
 		typ := dtype.(*arrow.StructType)
 		return NewStructBuilder(mem, typ)
@@ -319,10 +312,10 @@ func NewBuilder(mem memory.Allocator, dtype arrow.DataType) Builder {
 		return NewDictionaryBuilder(mem, typ)
 	case arrow.LARGE_LIST:
 		typ := dtype.(*arrow.LargeListType)
-		return NewLargeListBuilder(mem, typ.Elem())
+		return NewLargeListBuilderWithField(mem, typ.ElemField())
 	case arrow.MAP:
 		typ := dtype.(*arrow.MapType)
-		return NewMapBuilder(mem, typ.KeyType(), typ.ItemType(), typ.KeysSorted)
+		return NewMapBuilderWithType(mem, typ)
 	case arrow.EXTENSION:
 		typ := dtype.(arrow.ExtensionType)
 		return NewExtensionBuilder(mem, typ)
@@ -332,6 +325,9 @@ func NewBuilder(mem memory.Allocator, dtype arrow.DataType) Builder {
 	case arrow.DURATION:
 		typ := dtype.(*arrow.DurationType)
 		return NewDurationBuilder(mem, typ)
+	case arrow.RUN_END_ENCODED:
+		typ := dtype.(*arrow.RunEndEncodedType)
+		return NewRunEndEncodedBuilder(mem, typ.RunEnds(), typ.Encoded())
 	}
 	panic(fmt.Errorf("arrow/array: unsupported builder for %T", dtype))
 }

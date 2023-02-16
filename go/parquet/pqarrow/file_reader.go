@@ -23,13 +23,13 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/apache/arrow/go/v10/arrow"
-	"github.com/apache/arrow/go/v10/arrow/array"
-	"github.com/apache/arrow/go/v10/arrow/arrio"
-	"github.com/apache/arrow/go/v10/arrow/memory"
-	"github.com/apache/arrow/go/v10/parquet"
-	"github.com/apache/arrow/go/v10/parquet/file"
-	"github.com/apache/arrow/go/v10/parquet/schema"
+	"github.com/apache/arrow/go/v12/arrow"
+	"github.com/apache/arrow/go/v12/arrow/array"
+	"github.com/apache/arrow/go/v12/arrow/arrio"
+	"github.com/apache/arrow/go/v12/arrow/memory"
+	"github.com/apache/arrow/go/v12/parquet"
+	"github.com/apache/arrow/go/v12/parquet/file"
+	"github.com/apache/arrow/go/v12/parquet/schema"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/xerrors"
 )
@@ -210,7 +210,7 @@ func (fr *FileReader) GetFieldReaders(ctx context.Context, colIndices, rowGroups
 	// greatly improves performance.
 	// GetFieldReader causes read operations, when issued serially on large numbers of columns,
 	// this is super time consuming. Get field readers concurrently.
-	g,gctx := errgroup.WithContext(ctx)
+	g, gctx := errgroup.WithContext(ctx)
 	if !fr.Props.Parallel {
 		g.SetLimit(1)
 	}
@@ -482,7 +482,7 @@ func (fr *FileReader) getReader(ctx context.Context, field *SchemaField, arrowFi
 			return nil, nil
 		}
 
-		out, err = newLeafReader(&rctx, field.Field, rctx.colFactory(field.ColIndex, rctx.rdr), field.LevelInfo, fr.Props)
+		out, err = newLeafReader(&rctx, field.Field, rctx.colFactory(field.ColIndex, rctx.rdr), field.LevelInfo, fr.Props, fr.rdr.BufferPool())
 		return
 	}
 
@@ -499,7 +499,7 @@ func (fr *FileReader) getReader(ctx context.Context, field *SchemaField, arrowFi
 		// When reading structs with large numbers of columns, the serial load is very slow.
 		// This is especially true when reading Cloud Storage. Loading concurrently
 		// greatly improves performance.
-		g,gctx := errgroup.WithContext(ctx)
+		g, gctx := errgroup.WithContext(ctx)
 		if !fr.Props.Parallel {
 			g.SetLimit(1)
 		}
@@ -760,6 +760,8 @@ func (r *recordReader) Next() bool {
 }
 
 func (r *recordReader) Record() arrow.Record { return r.cur }
+
+func (r *recordReader) Err() error { return r.err }
 
 func (r *recordReader) Read() (arrow.Record, error) {
 	if r.cur != nil {

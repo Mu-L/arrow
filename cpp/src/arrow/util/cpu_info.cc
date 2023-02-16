@@ -41,13 +41,13 @@
 #include <cstdint>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 
 #include "arrow/result.h"
 #include "arrow/util/io_util.h"
 #include "arrow/util/logging.h"
-#include "arrow/util/optional.h"
 #include "arrow/util/string.h"
 
 #undef CPUINFO_ARCH_X86
@@ -226,7 +226,7 @@ void OsRetrieveCpuInfo(int64_t* hardware_flags, CpuInfo::Vendor* vendor,
 
 #elif defined(__APPLE__)
 //------------------------------ MACOS ------------------------------//
-util::optional<int64_t> IntegerSysCtlByName(const char* name) {
+std::optional<int64_t> IntegerSysCtlByName(const char* name) {
   size_t len = sizeof(int64_t);
   int64_t data = 0;
   if (sysctlbyname(name, &data, &len, nullptr, 0) == 0) {
@@ -238,7 +238,7 @@ util::optional<int64_t> IntegerSysCtlByName(const char* name) {
     auto st = IOErrorFromErrno(errno, "sysctlbyname failed for '", name, "'");
     ARROW_LOG(WARNING) << st.ToString();
   }
-  return util::nullopt;
+  return std::nullopt;
 }
 
 void OsRetrieveCacheSize(std::array<int64_t, kCacheLevels>* cache_sizes) {
@@ -345,6 +345,7 @@ int64_t LinuxGetCacheSize(int level) {
 // care about are present.
 // Returns a bitmap of flags.
 int64_t LinuxParseCpuFlags(const std::string& values) {
+#if defined(CPUINFO_ARCH_X86) || defined(CPUINFO_ARCH_ARM)
   const struct {
     std::string name;
     int64_t flag;
@@ -376,6 +377,9 @@ int64_t LinuxParseCpuFlags(const std::string& values) {
     }
   }
   return flags;
+#else
+  return 0;
+#endif
 }
 
 void OsRetrieveCacheSize(std::array<int64_t, kCacheLevels>* cache_sizes) {

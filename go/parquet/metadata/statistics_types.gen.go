@@ -22,13 +22,13 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/apache/arrow/go/v10/arrow"
-	"github.com/apache/arrow/go/v10/arrow/memory"
-	"github.com/apache/arrow/go/v10/internal/bitutils"
-	shared_utils "github.com/apache/arrow/go/v10/internal/utils"
-	"github.com/apache/arrow/go/v10/parquet"
-	"github.com/apache/arrow/go/v10/parquet/internal/encoding"
-	"github.com/apache/arrow/go/v10/parquet/schema"
+	"github.com/apache/arrow/go/v12/arrow"
+	"github.com/apache/arrow/go/v12/arrow/memory"
+	"github.com/apache/arrow/go/v12/internal/bitutils"
+	shared_utils "github.com/apache/arrow/go/v12/internal/utils"
+	"github.com/apache/arrow/go/v12/parquet"
+	"github.com/apache/arrow/go/v12/parquet/internal/encoding"
+	"github.com/apache/arrow/go/v12/parquet/schema"
 	"golang.org/x/xerrors"
 )
 
@@ -1755,7 +1755,9 @@ func NewByteArrayStatisticsFromEncoded(descr *schema.Column, mem memory.Allocato
 }
 
 func (s *ByteArrayStatistics) plainEncode(src parquet.ByteArray) []byte {
-	return src
+	out := make([]byte, len(src))
+	copy(out, src)
+	return out
 }
 
 func (s *ByteArrayStatistics) plainDecode(src []byte) parquet.ByteArray {

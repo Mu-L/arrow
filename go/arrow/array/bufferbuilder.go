@@ -19,9 +19,9 @@ package array
 import (
 	"sync/atomic"
 
-	"github.com/apache/arrow/go/v10/arrow/bitutil"
-	"github.com/apache/arrow/go/v10/arrow/internal/debug"
-	"github.com/apache/arrow/go/v10/arrow/memory"
+	"github.com/apache/arrow/go/v12/arrow/bitutil"
+	"github.com/apache/arrow/go/v12/arrow/internal/debug"
+	"github.com/apache/arrow/go/v12/arrow/memory"
 )
 
 type bufBuilder interface {
@@ -131,6 +131,9 @@ func (b *bufferBuilder) Finish() (buffer *memory.Buffer) {
 	buffer = b.buffer
 	b.buffer = nil
 	b.Reset()
+	if buffer == nil {
+		buffer = memory.NewBufferBytes(nil)
+	}
 	return
 }
 

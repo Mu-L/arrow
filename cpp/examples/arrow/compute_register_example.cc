@@ -57,7 +57,7 @@ class ExampleFunctionOptions : public cp::FunctionOptions {
 
 std::unique_ptr<cp::FunctionOptions> ExampleFunctionOptionsType::Copy(
     const cp::FunctionOptions&) const {
-  return std::unique_ptr<cp::FunctionOptions>(new ExampleFunctionOptions());
+  return std::make_unique<ExampleFunctionOptions>();
 }
 
 arrow::Status ExampleFunctionImpl(cp::KernelContext* ctx, const cp::ExecSpan& batch,
@@ -74,14 +74,11 @@ class ExampleNode : public cp::ExecNode {
   ExampleNode(ExecNode* input, const ExampleNodeOptions&)
       : ExecNode(/*plan=*/input->plan(), /*inputs=*/{input},
                  /*input_labels=*/{"ignored"},
-                 /*output_schema=*/input->output_schema(), /*num_outputs=*/1) {}
+                 /*output_schema=*/input->output_schema()) {}
 
   const char* kind_name() const override { return "ExampleNode"; }
 
-  arrow::Status StartProducing() override {
-    outputs_[0]->InputFinished(this, 0);
-    return arrow::Status::OK();
-  }
+  arrow::Status StartProducing() override { return output_->InputFinished(this, 0); }
 
   void ResumeProducing(ExecNode* output, int32_t counter) override {
     inputs_[0]->ResumeProducing(this, counter);
@@ -90,14 +87,14 @@ class ExampleNode : public cp::ExecNode {
     inputs_[0]->PauseProducing(this, counter);
   }
 
-  void StopProducing(ExecNode* output) override { inputs_[0]->StopProducing(this); }
-  void StopProducing() override { inputs_[0]->StopProducing(); }
+  arrow::Status StopProducingImpl() override { return arrow::Status::OK(); }
 
-  void InputReceived(ExecNode* input, cp::ExecBatch batch) override {}
-  void ErrorReceived(ExecNode* input, arrow::Status error) override {}
-  void InputFinished(ExecNode* input, int total_batches) override {}
-
-  arrow::Future<> finished() override { return inputs_[0]->finished(); }
+  arrow::Status InputReceived(ExecNode* input, cp::ExecBatch batch) override {
+    return arrow::Status::OK();
+  }
+  arrow::Status InputFinished(ExecNode* input, int total_batches) override {
+    return arrow::Status::OK();
+  }
 };
 
 arrow::Result<cp::ExecNode*> ExampleExecNodeFactory(cp::ExecPlan* plan,
@@ -149,7 +146,7 @@ arrow::Status RunComputeRegister(int argc, char** argv) {
   ARROW_RETURN_NOT_OK(maybe_plan.status());
   ARROW_ASSIGN_OR_RAISE(auto plan, maybe_plan);
 
-  arrow::AsyncGenerator<arrow::util::optional<cp::ExecBatch>> source_gen, sink_gen;
+  arrow::AsyncGenerator<std::optional<cp::ExecBatch>> source_gen, sink_gen;
   ARROW_RETURN_NOT_OK(
       cp::Declaration::Sequence(
           {

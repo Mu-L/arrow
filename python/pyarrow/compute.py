@@ -41,6 +41,7 @@ from pyarrow._compute import (  # noqa
     FilterOptions,
     IndexOptions,
     JoinOptions,
+    ListSliceOptions,
     MakeStructOptions,
     MapLookupOptions,
     MatchSubstringOptions,
@@ -53,6 +54,7 @@ from pyarrow._compute import (  # noqa
     RankOptions,
     ReplaceSliceOptions,
     ReplaceSubstringOptions,
+    RoundBinaryOptions,
     RoundOptions,
     RoundTemporalOptions,
     RoundToMultipleOptions,
@@ -79,7 +81,9 @@ from pyarrow._compute import (  # noqa
     list_functions,
     _group_by,
     # Udf
+    call_tabular_function,
     register_scalar_function,
+    register_tabular_function,
     ScalarUdfContext,
     # Expressions
     Expression,
@@ -316,6 +320,10 @@ def _make_global_functions():
             # Hash aggregate functions are not callable,
             # so let's not expose them at module level.
             continue
+        if func.kind == "scalar_aggregate" and func.arity == 0:
+            # Nullary scalar aggregate functions are not callable
+            # directly so let's not expose them at module level.
+            continue
         assert name not in g, name
         g[cpp_name] = g[name] = _wrap_function(name, func)
 
@@ -373,6 +381,7 @@ def cast(arr, target_type=None, safe=None, options=None):
     Returns
     -------
     casted : Array
+        The cast result as a new Array
     """
     safe_vars_passed = (safe is not None) or (target_type is not None)
 
@@ -451,6 +460,7 @@ def take(data, indices, *, boundscheck=True, memory_pool=None):
     Returns
     -------
     result : depends on inputs
+        Selected values for the given indices
 
     Examples
     --------
@@ -489,6 +499,7 @@ def fill_null(values, fill_value):
     Returns
     -------
     result : depends on inputs
+        Values with all null elements replaced
 
     Examples
     --------
@@ -533,7 +544,8 @@ def top_k_unstable(values, k, sort_keys=None, *, memory_pool=None):
 
     Returns
     -------
-    result : Array of indices
+    result : Array
+        Indices of the top-k ordered elements
 
     Examples
     --------
@@ -580,6 +592,7 @@ def bottom_k_unstable(values, k, sort_keys=None, *, memory_pool=None):
     Returns
     -------
     result : Array of indices
+        Indices of the bottom-k ordered elements
 
     Examples
     --------
@@ -649,6 +662,7 @@ def field(*name_or_index):
     Returns
     -------
     field_expr : Expression
+        Reference to the given field
 
     Examples
     --------
@@ -690,5 +704,6 @@ def scalar(value):
     Returns
     -------
     scalar_expr : Expression
+        An Expression representing the scalar value
     """
     return Expression._scalar(value)

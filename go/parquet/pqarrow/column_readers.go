@@ -20,19 +20,20 @@ import (
 	"encoding/binary"
 	"fmt"
 	"reflect"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
 
-	"github.com/apache/arrow/go/v10/arrow"
-	"github.com/apache/arrow/go/v10/arrow/array"
-	"github.com/apache/arrow/go/v10/arrow/bitutil"
-	"github.com/apache/arrow/go/v10/arrow/decimal128"
-	"github.com/apache/arrow/go/v10/arrow/memory"
-	"github.com/apache/arrow/go/v10/internal/utils"
-	"github.com/apache/arrow/go/v10/parquet"
-	"github.com/apache/arrow/go/v10/parquet/file"
-	"github.com/apache/arrow/go/v10/parquet/schema"
+	"github.com/apache/arrow/go/v12/arrow"
+	"github.com/apache/arrow/go/v12/arrow/array"
+	"github.com/apache/arrow/go/v12/arrow/bitutil"
+	"github.com/apache/arrow/go/v12/arrow/decimal128"
+	"github.com/apache/arrow/go/v12/arrow/memory"
+	"github.com/apache/arrow/go/v12/internal/utils"
+	"github.com/apache/arrow/go/v12/parquet"
+	"github.com/apache/arrow/go/v12/parquet/file"
+	"github.com/apache/arrow/go/v12/parquet/schema"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/xerrors"
 )
@@ -50,13 +51,13 @@ type leafReader struct {
 	refCount int64
 }
 
-func newLeafReader(rctx *readerCtx, field *arrow.Field, input *columnIterator, leafInfo file.LevelInfo, props ArrowReadProperties) (*ColumnReader, error) {
+func newLeafReader(rctx *readerCtx, field *arrow.Field, input *columnIterator, leafInfo file.LevelInfo, props ArrowReadProperties, bufferPool *sync.Pool) (*ColumnReader, error) {
 	ret := &leafReader{
 		rctx:      rctx,
 		field:     field,
 		input:     input,
 		descr:     input.Descr(),
-		recordRdr: file.NewRecordReader(input.Descr(), leafInfo, field.Type.ID() == arrow.DICTIONARY, rctx.mem),
+		recordRdr: file.NewRecordReader(input.Descr(), leafInfo, field.Type, rctx.mem, bufferPool),
 		props:     props,
 		refCount:  1,
 	}
@@ -285,7 +286,7 @@ func (sr *structReader) BuildArray(lenBound int64) (*arrow.Chunked, error) {
 	childArrData := make([]arrow.ArrayData, 0)
 	// gather children arrays and def levels
 	for _, child := range sr.children {
-		field, err := child.BuildArray(validityIO.Read)
+		field, err := child.BuildArray(lenBound)
 		if err != nil {
 			return nil, err
 		}
@@ -387,7 +388,12 @@ func (lr *listReader) BuildArray(lenBound int64) (*arrow.Chunked, error) {
 		return nil, err
 	}
 
-	arr, err := lr.itemRdr.BuildArray(int64(offsetData[int(validityIO.Read)]))
+	// if the parent (itemRdr) has nulls and is a nested type like list
+	// then we need BuildArray to account for that with the number of
+	// definition levels when building out the bitmap. So the upper bound
+	// to make sure we have the space for is the worst case scenario,
+	// the upper bound is the value of the last offset + the nullcount
+	arr, err := lr.itemRdr.BuildArray(int64(offsetData[int(validityIO.Read)]) + validityIO.NullCount)
 	if err != nil {
 		return nil, err
 	}
@@ -474,7 +480,7 @@ func transferColumnData(rdr file.RecordReader, valueType arrow.DataType, descr *
 		data = transferInt(rdr, valueType)
 	case arrow.DATE64:
 		data = transferDate64(rdr, valueType)
-	case arrow.FIXED_SIZE_BINARY, arrow.BINARY, arrow.STRING:
+	case arrow.FIXED_SIZE_BINARY, arrow.BINARY, arrow.STRING, arrow.LARGE_BINARY, arrow.LARGE_STRING:
 		return transferBinary(rdr, valueType), nil
 	case arrow.DECIMAL:
 		switch descr.PhysicalType() {
@@ -528,7 +534,7 @@ func transferZeroCopy(rdr file.RecordReader, dt arrow.DataType) arrow.ArrayData 
 func transferBinary(rdr file.RecordReader, dt arrow.DataType) *arrow.Chunked {
 	brdr := rdr.(file.BinaryRecordReader)
 	chunks := brdr.GetBuilderChunks()
-	if dt == arrow.BinaryTypes.String {
+	if dt == arrow.BinaryTypes.String || dt == arrow.BinaryTypes.LargeString {
 		// convert chunks from binary to string without copying data,
 		// just changing the interpretation of the metadata
 		for idx := range chunks {

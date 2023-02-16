@@ -1221,6 +1221,22 @@ TYPED_TEST(TestPrimitiveBuilder, TestAppendNull) {
   }
 }
 
+TYPED_TEST(TestPrimitiveBuilder, TestAppendOptional) {
+  int64_t size = 1000;
+  for (int64_t i = 0; i < size; ++i) {
+    ASSERT_OK(this->builder_->AppendOrNull(std::nullopt));
+    ASSERT_EQ(i + 1, this->builder_->null_count());
+  }
+
+  std::shared_ptr<Array> out;
+  FinishAndCheckPadding(this->builder_.get(), &out);
+  auto result = checked_pointer_cast<typename TypeParam::ArrayType>(out);
+
+  for (int64_t i = 0; i < size; ++i) {
+    ASSERT_TRUE(result->IsNull(i)) << i;
+  }
+}
+
 TYPED_TEST(TestPrimitiveBuilder, TestAppendNulls) {
   const int64_t size = 10;
   ASSERT_OK(this->builder_->AppendNulls(size));
@@ -2254,12 +2270,12 @@ struct FWBinaryAppender {
     return Status::OK();
   }
 
-  Status VisitValue(util::string_view v) {
+  Status VisitValue(std::string_view v) {
     data.push_back(v);
     return Status::OK();
   }
 
-  std::vector<util::string_view> data;
+  std::vector<std::string_view> data;
 };
 
 TEST_F(TestFWBinaryArray, ArraySpanVisitor) {
@@ -2290,7 +2306,7 @@ TEST_F(TestFWBinaryArray, ArrayIndexOperator) {
   auto fsba = checked_pointer_cast<FixedSizeBinaryArray>(arr);
 
   ASSERT_EQ("abc", (*fsba)[0].value());
-  ASSERT_EQ(util::nullopt, (*fsba)[1]);
+  ASSERT_EQ(std::nullopt, (*fsba)[1]);
   ASSERT_EQ("def", (*fsba)[2].value());
 }
 
@@ -2304,7 +2320,17 @@ class TestAdaptiveIntBuilder : public TestBuilder {
     builder_ = std::make_shared<AdaptiveIntBuilder>(pool_);
   }
 
-  void Done() { FinishAndCheckPadding(builder_.get(), &result_); }
+  void EnsureValuesBufferNotNull(const ArrayData& data) {
+    // The values buffer should be initialized
+    ASSERT_EQ(2, data.buffers.size());
+    ASSERT_NE(nullptr, data.buffers[1]);
+    ASSERT_NE(nullptr, data.buffers[1]->data());
+  }
+
+  void Done() {
+    FinishAndCheckPadding(builder_.get(), &result_);
+    EnsureValuesBufferNotNull(*result_->data());
+  }
 
   template <typename ExpectedType>
   void TestAppendValues() {
@@ -2554,6 +2580,8 @@ TEST_F(TestAdaptiveIntBuilder, TestAppendEmptyValue) {
   // NOTE: The fact that we get 0 is really an implementation detail
   AssertArraysEqual(*result_, *ArrayFromJSON(int8(), "[null, null, 0, 42, 0, 0]"));
 }
+
+TEST_F(TestAdaptiveIntBuilder, Empty) { Done(); }
 
 TEST(TestAdaptiveIntBuilderWithStartIntSize, TestReset) {
   auto builder = std::make_shared<AdaptiveIntBuilder>(
@@ -2831,8 +2859,6 @@ class DecimalTest : public ::testing::TestWithParam<int> {
     auto type = std::make_shared<TYPE>(precision, 4);
     auto builder = std::make_shared<DecimalBuilder>(type);
 
-    size_t null_count = 0;
-
     const size_t size = draw.size();
 
     ARROW_EXPECT_OK(builder->Reserve(size));
@@ -2842,7 +2868,6 @@ class DecimalTest : public ::testing::TestWithParam<int> {
         ARROW_EXPECT_OK(builder->Append(draw[i]));
       } else {
         ARROW_EXPECT_OK(builder->AppendNull());
-        ++null_count;
       }
     }
 
@@ -3538,7 +3563,7 @@ TYPED_TEST(TestPrimitiveArray, IndexOperator) {
       ASSERT_EQ(this->values_[i], res.value());
     } else {
       ASSERT_FALSE(res.has_value());
-      ASSERT_EQ(res, util::nullopt);
+      ASSERT_EQ(res, std::nullopt);
     }
   }
 }

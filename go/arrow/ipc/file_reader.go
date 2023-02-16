@@ -23,13 +23,14 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/apache/arrow/go/v10/arrow"
-	"github.com/apache/arrow/go/v10/arrow/array"
-	"github.com/apache/arrow/go/v10/arrow/bitutil"
-	"github.com/apache/arrow/go/v10/arrow/endian"
-	"github.com/apache/arrow/go/v10/arrow/internal/dictutils"
-	"github.com/apache/arrow/go/v10/arrow/internal/flatbuf"
-	"github.com/apache/arrow/go/v10/arrow/memory"
+	"github.com/apache/arrow/go/v12/arrow"
+	"github.com/apache/arrow/go/v12/arrow/array"
+	"github.com/apache/arrow/go/v12/arrow/bitutil"
+	"github.com/apache/arrow/go/v12/arrow/endian"
+	"github.com/apache/arrow/go/v12/arrow/internal"
+	"github.com/apache/arrow/go/v12/arrow/internal/dictutils"
+	"github.com/apache/arrow/go/v12/arrow/internal/flatbuf"
+	"github.com/apache/arrow/go/v12/arrow/memory"
 )
 
 // FileReader is an Arrow file reader.
@@ -498,6 +499,17 @@ func (ctx *arrayLoaderContext) loadArray(dt arrow.DataType) arrow.ArrayData {
 		defer storage.Release()
 		return array.NewData(dt, storage.Len(), storage.Buffers(), storage.Children(), storage.NullN(), storage.Offset())
 
+	case *arrow.RunEndEncodedType:
+		field, buffers := ctx.loadCommon(dt.ID(), 1)
+		defer releaseBuffers(buffers)
+
+		runEnds := ctx.loadChild(dt.RunEnds())
+		defer runEnds.Release()
+		values := ctx.loadChild(dt.Encoded())
+		defer values.Release()
+
+		return array.NewData(dt, int(field.Length()), buffers, []arrow.ArrayData{runEnds, values}, int(field.NullCount()), 0)
+
 	case arrow.UnionType:
 		return ctx.loadUnion(dt)
 
@@ -512,7 +524,7 @@ func (ctx *arrayLoaderContext) loadCommon(typ arrow.Type, nbufs int) (*flatbuf.F
 
 	var buf *memory.Buffer
 
-	if hasValidityBitmap(typ, ctx.version) {
+	if internal.HasValidityBitmap(typ, flatbuf.MetadataVersion(ctx.version)) {
 		switch field.NullCount() {
 		case 0:
 			ctx.ibuffer++
